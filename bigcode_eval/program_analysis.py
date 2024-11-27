@@ -9,7 +9,7 @@ def read_file_to_string(file_path):
 
 SVACE_PATH = "/home/jovyan/CodePatchLLM/svace-4.0.0-x64-linux/bin/svace"
 
-def svace_analyze(file, lang, epoch, dir):
+def svace_analyze(file, lang, epoch, dir, task_id):
     logging.info(f"File Name: {file}, Directory: {dir}, Epoch: {epoch}")
     compiler_comand = ""
     result = ""
@@ -26,11 +26,11 @@ def svace_analyze(file, lang, epoch, dir):
         return 0
 
     if lang == "java":
-        compiler_comand = f"cd {dir}; chmod 777 {file}; {SVACE_PATH} build javac {file}"
+        compiler_comand = f"cd {dir}; {SVACE_PATH} build javac {file}"
     elif lang == "python":
-        compiler_comand = f"cd {dir}; chmod 777 {file}; {SVACE_PATH} build --python {file}"
+        compiler_comand = f"cd {dir}; {SVACE_PATH} build --python {file}"
     elif lang == "kotlin":
-        compiler_comand = f"cd {dir}; chmod 777 {file}; {SVACE_PATH} build kotlinc {file}"
+        compiler_comand = f"cd {dir}; {SVACE_PATH} build kotlinc {file}"
     else:
         Exception("Undefined lanuage of programming. Use only java, python, kotlin. Sensetive to capitalization")
 
@@ -46,7 +46,11 @@ def svace_analyze(file, lang, epoch, dir):
             result = "Write the full code with the correction."
         else:
             result = e.stderr
-            result = result[:result.find("svace build: error:") + len("svace build: error:")]
+            if result.find("svace build: error:") != -1:
+                result = result[:result.find("svace build: error:") + len("svace build: error:")]
+            elif 'root: warning: Failed to compile' in result: 
+                result = 'svace build: error: Failed to compile, syntax error'
+            #logging.info(f'result: {result, e.stderr}')
 
     if len(result) == 0:
         try:
@@ -60,8 +64,6 @@ def svace_analyze(file, lang, epoch, dir):
         logging.info(test.stdout)
         directory = dir + ".svace-dir/analyze-res"
         files = os.listdir(directory)
-        # svres_files = [file for file in files if file.endswith(".svres")]
-        #txt = [file for file in files if file.endswith(f"{epoch}.txt")]
         txt = [file for file in files if file.endswith(f"llm_code.txt")]
         warnings = ""
         if len(txt) != 0:
@@ -80,8 +82,8 @@ def svace_analyze(file, lang, epoch, dir):
         else:
             logging.error(f"Not Found analyze result {directory}/llm_code.txt")
 
-    output_file_path = os.path.join(dir, f"svace_message.txt")
+    output_file_path = os.path.join(dir, f"svace_message_{task_id}.txt")
     with open(output_file_path, "w") as f:
         f.write(result)
-    logging.info(f"Finished Svace analyzing, result saved in {output_file_path}")
+    logging.info(f"Finished Svace analyzing, result saved in {output_file_path} {result}")
     return 1

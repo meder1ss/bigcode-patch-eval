@@ -2,6 +2,7 @@ import os
 import fnmatch
 import json
 import warnings
+import shutil
 
 import datasets
 import torch
@@ -34,6 +35,11 @@ class MultiChoice:
     def __iter__(self):
         for choice in self.choices:
             yield choice
+
+def read_file_to_string(file_path):
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
+    return file_contents
 
 def parse_args():
     parser = HfArgumentParser(EvalArguments)
@@ -89,7 +95,7 @@ def parse_args():
     parser.add_argument(
         "--max_length_generation",
         type=int,
-        default=512,
+        default=1024,
         help="Maximum length of generated sequence (prompt+generation)",
     )
     parser.add_argument(
@@ -245,7 +251,6 @@ def main():
     datasets.logging.set_verbosity_error()
 
     logging.basicConfig(
-    # filename='HISTORYlistener.log',
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(module)s - %(funcName)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
@@ -404,28 +409,6 @@ def main():
                 generations, references = evaluator.generate_text(
                     task, intermediate_generations=intermediate_generations
                 )
-                if args.static_analyze: 
-                    if task == "humaneval" or task == "mbpp" or "apps-" in task:
-                        formats = "py"
-                        lang = 'Python'
-                    else:
-                        print(f"Can't do static analyzis on this dataset: {task}, skipping")
-                        continue
-                    os.makedirs("./llm_code", exist_ok=True)
-                    output_file_path = os.path.join("./llm_code", f"Solution.{formats}")
-                    for epoch in range(args.static_analyze_epochs):
-                        svace_flags = []
-                        for code in generations:
-                            with open(output_file_path, "w") as f:
-                                f.write(code[0])
-                            svace_flag = svace_analyze(file=f"Solution.{formats}", lang=lang, dir="./llm_code/", epoch=epoch)
-                            svace_flags.append(svace_flag)
-                        if sum(svace_flags) == 0:
-                            print(f'Every generated code for {task} passed static analyzator!')
-                            break
-                        generations, references = evaluator.generate_text(
-                        task, intermediate_generations=intermediate_generations
-                        )
                 if accelerator.is_main_process:
                     save_generations_path = f"{os.path.splitext(args.save_generations_path)[0]}_{task}.json"
                     save_references_path = f"references_{task}.json"
@@ -440,27 +423,51 @@ def main():
                     task, intermediate_generations=intermediate_generations
                 )
                 if args.static_analyze: 
-                    if task == "humaneval" or task == "mbpp" or "apps-" in task:
+                    if task == "humaneval" or task == "mbpp" or "apps-" in task or task == 'multiple-py' or task=='instruct-humaneval':
                         formats = "py"
                         lang = 'python'
                     else:
-                        print(f"Can't do static analyzis on this dataset: {task}, skipping")
+                        print(f"ERROR! Can't do static analyzis on this dataset: {task}. Skipping...")
                         continue
-                    os.makedirs("./llm_code", exist_ok=True)
-                    output_file_path = os.path.join("./llm_code", f"Solution.{formats}")
+                    path = "./llm_code"
+                    if not os.path.exists(path):
+                        os.makedirs(path)
+                    good_gens =[False]*args.limit
                     for epoch in range(args.static_analyze_epochs):
-                        svace_flags = []
+                        print(f'---> Starting epoch {epoch}')
+                        task_id = 0
                         for code in generations:
+                            if good_gens[task_id]:
+                                task_id += 1
+                                continue
+                            print(f'Task id: {task_id}')
+                            output_file_path = os.path.join("./llm_code", f"Solution_{task_id}.{formats}")
                             with open(output_file_path, "w") as f:
                                 f.write(code[0])
-                            svace_flag = svace_analyze(file=f"Solution.{formats}", lang=lang, dir="./llm_code/", epoch=epoch)
-                            svace_flags.append(svace_flag)
-                        if sum(svace_flags) == 0:
-                            print(f'Every generated code for {task} passed static analyzator!')
+                            svace_flag = svace_analyze(file=f"Solution_{task_id}.{formats}", lang=lang, dir="./llm_code/", epoch=epoch, task_id=task_id)
+                            if svace_flag == 0: 
+                                break
+                            task_id += 1
+                        continue_analyzis = False
+                        idx = 0
+                        for svace_output_file in os.listdir("./llm_code"):
+                            if 'svace_message' in svace_output_file:
+                                svace_output = read_file_to_string(os.path.join("./llm_code", svace_output_file))
+                                #print('Output', svace_output)
+                                if svace_output != '':
+                                    continue_analyzis = True 
+                                else: 
+                                    good_gens[idx] = True
+                                idx += 1
+                        if continue_analyzis:
+                            print(f'Generations didnt pass static analyzer test. Continuing...')
+                            results[task], generations = evaluator.evaluate(
+                                task, intermediate_generations=intermediate_generations
+                            )
+                        else:
+                            print(f'SUCCESS: all generations passed static analyzer test! Finishing on {epoch} epoch.')
                             break
-                        results[task], generations = evaluator.evaluate(
-                            task, intermediate_generations=intermediate_generations
-                        )
+                        
                     
 
     # Save all args to config

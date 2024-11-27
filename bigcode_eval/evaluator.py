@@ -65,7 +65,6 @@ class Evaluator:
             n_tasks -= len(curr_generations)
         intermediate_save_generations_path = f"{os.path.splitext(self.args.save_generations_path)[0]}_{task_name}_intermediate.json"
         curr_sample_idx = len(curr_generations)
-
         generations = parallel_generations(
             task,
             dataset,
@@ -105,7 +104,7 @@ class Evaluator:
                 os.environ["HF_ALLOW_CODE_EVAL"] = "1"
             print("Evaluating generations...")
             results = task.process_results(generations, references)
-            return results
+            return results, generations
 
     def save_json_files(
         self,

@@ -4,13 +4,18 @@ import re
 import warnings
 from collections import defaultdict
 from typing import List, Optional
-
+import os
 import torch
 from torch.utils.data import IterableDataset
 from tqdm import tqdm
 
 INFILL_MODE = False
 INSTRUCTION_MODE = False
+
+def read_file_to_string(file_path):
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
+    return file_contents
 
 
 class TokenizedDataset(IterableDataset):
@@ -54,6 +59,20 @@ class TokenizedDataset(IterableDataset):
         instruction = []
         for sample in range(self.limit_start, self.limit_start + self.n_tasks):
             prompt_contents = self.task.get_prompt(self.dataset[sample])
+
+            '''svace_output_path = f'./llm_code/svace_message_{sample}.txt'
+            if os.path.exists(svace_output_path):
+                svace_output = read_file_to_string(svace_output_path)
+                #if svace_output == '':
+                #    prompt_contents = prompt_contents
+                #else:
+                #    prompt_contents = "correct program above with this feedback: " + svace_output + ".\n Write the resulting code."
+                pred_generation = read_file_to_string(f'./llm_code/Solution_{sample}.py' )
+                if svace_output == '':
+                    prompt_contents = pred_generation
+                else:
+                    prompt_contents =  insert_code_and_svace_output_to_gen(pred_generation, svace_output, prompt_contents)'''
+
             if isinstance(prompt_contents, str):
                 # Normal code completion mode
                 infill.append(False)
@@ -74,6 +93,19 @@ class TokenizedDataset(IterableDataset):
                     prompt = self._make_instruction_prompt(
                         **prompt_contents, prefix=self.prefix
                     )
+                    svace_output_path = f'./llm_code/svace_message_{sample}.txt'
+                    if os.path.exists(svace_output_path):
+                        svace_output = read_file_to_string(svace_output_path)
+                        pred_generation = read_file_to_string(f'./llm_code/Solution_{sample}.py' )
+                        if svace_output != '':
+                            idx = prompt.index('<end_token>')
+                            #prompt_contents = f'<user_token>Correct programm below with this output: {svace_output} \n {pred_generation} '
+
+                            prompt_contents = f'<user_token> Correct program above with this feedback:  {svace_output}.\n Write the resulting code. '
+                            prompt=prompt_contents + prompt[idx:]
+                            '''prompt_contents = f'<user_token> Correct program with this feedback:  {svace_output}.\n Write the resulting code. '
+                            prompt=prompt_contents + f'<end_token><assistant_token>{pred_generation}'''
+                            
             else:
                 raise ValueError(f"Unsupported prompt format: {type(prompt_contents)}")
             prompts.append(prompt)
@@ -82,11 +114,14 @@ class TokenizedDataset(IterableDataset):
                 if isinstance(prompt_encoder, str):
                     prompt_encoder = self.prefix + prompt_encoder
                 prompts_encoder.append(prompt_encoder)
+                pred_generation = read_file_to_string(f'./llm_code/Solution_{sample}.py' )
+                
 
         if not len(set(infill)) == 1 or not len(set(instruction)) == 1:
             raise ValueError(
                 "Mixed infill/instruction and completion prompts are not supported."
             )
+        
         global INFILL_MODE
         global INSTRUCTION_MODE
         INFILL_MODE = infill[0]
@@ -407,9 +442,7 @@ def update_code_gens(
             if not INFILL_MODE:
                 gen_code = gen_code[len(prefix) :]
             if postprocess:
-                code_gens[sample].append(
-                    task.postprocess_generation(gen_code, int(sample) + limit_start)
-                )
+                code_gens[sample].append(task.postprocess_generation(gen_code, int(sample) + limit_start))
             else:
                 warnings.warn(
                     "model output is not postprocessed, this might lower evaluation scores"
