@@ -41,6 +41,44 @@ def read_file_to_string(file_path):
         file_contents = file.read()
     return file_contents
 
+def define_lang_for_static_analyzis(task_name): 
+    if task_name in ["humaneval","instruct-humaneval","humanevalfixtests-python"]:
+        formats = "py"
+        lang = 'python'
+    elif task_name == 'humanevalfixtests-java': 
+        formats = "java"
+        lang = 'java'
+    elif task_name == 'humanevalfixtests-cpp': 
+        formats = "cpp"
+        lang = 'cpp'
+    elif task_name == 'humanevalfixtests-go': 
+        formats = "go"
+        lang = 'go'
+    else:
+        print(f"ERROR! Can't do static analyzis on this dataset: {task_name}. Skipping...")
+        formats = ''
+        lang = ''
+    return formats, lang
+
+def static_analyzis_cycle(formats, lang, path, epoch, code_generations, good_gens): 
+    print(f'---> Starting epoch {epoch}')
+    task_id = 0
+    for code in code_generations:
+        if good_gens[task_id]:
+            task_id += 1
+            continue
+        print(f'Task id: {task_id}')
+        code_path = os.path.join(path, str(task_id))
+        os.makedirs(code_path, exist_ok=True)
+        code_file_path = os.path.join(code_path, f"solution.{formats}")
+        with open(code_file_path, "w") as f:
+            f.write(code[0])
+        svace_flag = svace_analyze(file=f"solution.{formats}", lang=lang, dir=code_path, task_id=task_id)
+        if svace_flag == 0: 
+            break
+        task_id += 1
+    return 
+        
 def parse_args():
     parser = HfArgumentParser(EvalArguments)
 
@@ -423,42 +461,24 @@ def main():
                     task, intermediate_generations=intermediate_generations
                 )
                 if args.static_analyze: 
-                    if task == "humaneval" or task == "mbpp" or "apps-" in task or task == 'multiple-py' or task=='instruct-humaneval':
-                        formats = "py"
-                        lang = 'python'
-                    else:
+                    formats, lang = define_lang_for_static_analyzis(task)
+                    if formats == '' and lang == '':
                         print(f"ERROR! Can't do static analyzis on this dataset: {task}. Skipping...")
                         continue
+                    #define path where code gens will be stored
                     path = "./llm_code"
-                    if not os.path.exists(path):
-                        os.makedirs(path)
+                    os.makedirs(path, exist_ok=True)
                     good_gens =[False]*args.limit
                     for epoch in range(args.static_analyze_epochs):
-                        print(f'---> Starting epoch {epoch}')
-                        task_id = 0
-                        for code in generations:
-                            if good_gens[task_id]:
-                                task_id += 1
-                                continue
-                            print(f'Task id: {task_id}')
-                            output_file_path = os.path.join("./llm_code", f"Solution_{task_id}.{formats}")
-                            with open(output_file_path, "w") as f:
-                                f.write(code[0])
-                            svace_flag = svace_analyze(file=f"Solution_{task_id}.{formats}", lang=lang, dir="./llm_code/", epoch=epoch, task_id=task_id)
-                            if svace_flag == 0: 
-                                break
-                            task_id += 1
+                        static_analyzis_cycle(formats, lang, path, epoch, generations, good_gens)
                         continue_analyzis = False
-                        idx = 0
-                        for svace_output_file in os.listdir("./llm_code"):
-                            if 'svace_message' in svace_output_file:
-                                svace_output = read_file_to_string(os.path.join("./llm_code", svace_output_file))
-                                #print('Output', svace_output)
-                                if svace_output != '':
-                                    continue_analyzis = True 
-                                else: 
-                                    good_gens[idx] = True
-                                idx += 1
+                        for idx in os.listdir(path):
+                            svace_output = read_file_to_string(os.path.join(path, f"{idx}/svace_message.txt"))
+                            #print('Output', svace_output)
+                            if svace_output != '':
+                                continue_analyzis = True
+                            else: 
+                                good_gens[int(idx)] = True
                         if continue_analyzis:
                             print(f'Generations didnt pass static analyzer test. Continuing...')
                             results[task], generations = evaluator.evaluate(
@@ -467,8 +487,6 @@ def main():
                         else:
                             print(f'SUCCESS: all generations passed static analyzer test! Finishing on {epoch} epoch.')
                             break
-                        
-                    
 
     # Save all args to config
     results["config"] = vars(args)

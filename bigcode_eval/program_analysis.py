@@ -7,10 +7,10 @@ def read_file_to_string(file_path):
         file_contents = file.read()
     return file_contents
 
-SVACE_PATH = "/home/jovyan/CodePatchLLM/svace-4.0.0-x64-linux/bin/svace"
+SVACE_PATH = "/home/jovyan/CodePatchLLM/bigcode-evaluation-harness/svace-4.0.0-x64-linux/bin/svace"
 
-def svace_analyze(file, lang, epoch, dir, task_id):
-    logging.info(f"File Name: {file}, Directory: {dir}, Epoch: {epoch}")
+def svace_analyze(file, lang, dir, task_id):
+    logging.info(f"File Name: {file}, Directory: {dir}")
     compiler_comand = ""
     result = ""
     try:
@@ -28,7 +28,7 @@ def svace_analyze(file, lang, epoch, dir, task_id):
     if lang == "java":
         compiler_comand = f"cd {dir}; {SVACE_PATH} build javac {file}"
     elif lang == "python":
-        compiler_comand = f"cd {dir}; {SVACE_PATH} build --python {file}"
+        compiler_comand = f"cd {dir}; {SVACE_PATH} build python {file}"
     elif lang == "kotlin":
         compiler_comand = f"cd {dir}; {SVACE_PATH} build kotlinc {file}"
     else:
@@ -43,15 +43,20 @@ def svace_analyze(file, lang, epoch, dir, task_id):
         logging.error(f"Error executing command: {compiler_comand}")
         logging.error(f"Error message: {e.stderr}")
         if len(e.stderr) == 0:
-            result = "Write the full code with the correction."
+            #result = "Write the full code with the correction."
+            result = ""
         else:
             result = e.stderr
+            result = result[:result.find("svace build: error:") + len("svace build: error:")]
+            '''
             if result.find("svace build: error:") != -1:
                 result = result[:result.find("svace build: error:") + len("svace build: error:")]
             elif 'root: warning: Failed to compile' in result: 
-                result = 'svace build: error: Failed to compile, syntax error'
+                result = 'svace build: error: Failed to compile, syntax error
+            '''
             #logging.info(f'result: {result, e.stderr}')
 
+    '''
     if len(result) == 0:
         try:
             test = subprocess.run(f"cd {dir}; {SVACE_PATH} analyze",
@@ -63,9 +68,12 @@ def svace_analyze(file, lang, epoch, dir, task_id):
 
         logging.info(test.stdout)
         directory = dir + ".svace-dir/analyze-res"
-        files = os.listdir(directory)
-        txt = [file for file in files if file.endswith(f"llm_code.txt")]
-        warnings = ""
+        try:
+            files = os.listdir(directory)
+            txt = [file for file in files if file.endswith(f"{task_id}.txt")]
+            warnings = ""
+        except: 
+            txt = []
         if len(txt) != 0:
             svace_an = read_file_to_string(directory + f"/{txt[0]}")
             mask = 'Total warnings: '
@@ -80,9 +88,9 @@ def svace_analyze(file, lang, epoch, dir, task_id):
             logging.info(f"Total warnings: {total_warnings}, Warnings: {warnings}")
             result += warnings
         else:
-            logging.error(f"Not Found analyze result {directory}/llm_code.txt")
+            logging.error(f"Not Found analyze result {directory}/{task_id}.txt")'''
 
-    output_file_path = os.path.join(dir, f"svace_message_{task_id}.txt")
+    output_file_path = os.path.join(dir, f"svace_message.txt")
     with open(output_file_path, "w") as f:
         f.write(result)
     logging.info(f"Finished Svace analyzing, result saved in {output_file_path} {result}")

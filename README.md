@@ -16,12 +16,29 @@
 </h3>
 
 ## CodePatchLLM + big-code-eval
+МОДЕЛИ:  
+1) https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct  
+2) https://huggingface.co/deepseek-ai/DeepSeek-Coder-V2-Instruct  
+3) https://huggingface.co/codellama/CodeLlama-34b-Instruct-hf  
+ДАТАСЕТЫ:  
+1) HumanEvalPack (--prompt instruct)  
+- humanevalfixtests-python  
+- humanevalfixtests-java  
+- humanevalfixtests-cpp  
+Так же поддерживаются языки: js, go, rust.   
 Для использования svace анализа при запуске main.py подается аргумент --static_analyze, максимальное количество эпох для генерации с учетом ответа от статического анализатора задается через аргумент --static_analyze_epochs <int> (по умолчанию выставляется в значение 3)
 Пример запуска:  
 ```
-python3 main.py --tasks humaneval --allow_code_execution --limit 3 --save_generations --save_references --static_analyze --static_analyze_epochs 3
+python3 main.py \
+  --model <MODEL_NAME> \
+  --prompt instruct \
+  --tasks humanevalfixtests-python \
+  --limit", "10" \
+  --instruction_tokens "<user_token>,<end_token>,<assistant_token>" \
+  --allow_code_execution" \
+  --trust_remote_code" \
+  --static_analyze"
 ```
-
 ## Features
 
 This is a framework for the evaluation of code generation models. This work is inspired from [EleutherAI/lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) for evaluating language models in general. We welcome contributions to fix issues, enhance features and add new benchmarks. You can find contribution guides in [`docs/guide.md`](https://github.com/bigcode-project/bigcode-evaluation-harness/blob/main/docs/guide.md) and [`CONTRIBUTING.md`](https://github.com/bigcode-project/bigcode-evaluation-harness/blob/main/CONTRIBUTING.md) and more documentation in [`docs/README.md`](https://github.com/bigcode-project/bigcode-evaluation-harness/blob/main/docs/README.md). 
