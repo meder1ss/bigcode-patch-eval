@@ -20,13 +20,14 @@
 1) https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct  
 2) https://huggingface.co/deepseek-ai/DeepSeek-Coder-V2-Instruct  
 3) https://huggingface.co/codellama/CodeLlama-34b-Instruct-hf  
+
 ДАТАСЕТЫ:  
-1) HumanEvalPack (--prompt instruct)  
+HumanEvalPack (--prompt instruct)  
 - humanevalfixtests-python  
 - humanevalfixtests-java  
 - humanevalfixtests-cpp  
 Так же поддерживаются языки: js, go, rust.   
-Для использования svace анализа при запуске main.py подается аргумент --static_analyze, максимальное количество эпох для генерации с учетом ответа от статического анализатора задается через аргумент --static_analyze_epochs <int> (по умолчанию выставляется в значение 3)
+Для использования svace анализа при запуске main.py подается аргумент --static_analyze, максимальное количество эпох для генерации с учетом ответа от статического анализатора задается через аргумент --static_analyze_epochs <int> (по умолчанию выставляется в значение 3)  
 Пример запуска:  
 ```
 python3 main.py \
