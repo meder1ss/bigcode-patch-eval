@@ -57,6 +57,7 @@ class TokenizedDataset(IterableDataset):
         prompts_encoder = []
         infill = []
         instruction = []
+        f = open('prompts.json', 'w')
         for sample in range(self.limit_start, self.limit_start + self.n_tasks):
             prompt_contents = self.task.get_prompt(self.dataset[sample])
 
@@ -79,9 +80,26 @@ class TokenizedDataset(IterableDataset):
                 # Normal code completion mode
                 infill.append(False)
                 instruction.append(False)
+                
                 prompt = self.prefix + prompt_contents
+                
+                cont = {'id': sample, 'prompt': prompt}
+                f.write(str(cont)+',')
+                '''
+                svace_output_path = f'./llm_code/{sample}/svace_message.txt'
+                if os.path.exists(svace_output_path):
+                    svace_output = read_file_to_string(svace_output_path)
+                    if svace_output != '':
+                        #idx = prompt.index('<end_token>')
+                        #constructing prompt without last generation
+                        pred_generation = read_file_to_string(f'./llm_code/{sample}/solution.py' )
+                        prompt_contents = f'Correct solution below with this feedback: {svace_output}Write ONLY the resulting code.\n'
+                        prompt = prompt_contents + pred_generation
+                '''
+
             elif isinstance(prompt_contents, dict):
                 if set(prompt_contents.keys()) == {"prefix", "suffix"}:
+                   
                     # Infilling mode
                     infill.append(True)
                     instruction.append(False)
@@ -90,28 +108,42 @@ class TokenizedDataset(IterableDataset):
                     )
                     
                 elif set(prompt_contents.keys()) == {"instruction", "context"}:
+                    
                     # Instruction-tuning mode
                     instruction.append(True)
                     infill.append(False)
                     prompt = self._make_instruction_prompt(
                         **prompt_contents, prefix=self.prefix
                     )
-                    svace_output_path = f'./llm_code/{sample}/svace_message.txt'
+                    if os.path.exists(f'./llm_code/{sample}/0'):
+                        task_path = f'./llm_code/{sample}/'
+                        max_epoch = max([int(i) for i in os.listdir(task_path)])
+                        task_path = f'{task_path}/{max_epoch}'
+                    else: 
+                        task_path = f'./llm_code/{sample}'
+                    svace_output_path = os.path.join(task_path, 'svace_message.txt')
+                   
                     if os.path.exists(svace_output_path):
                         svace_output = read_file_to_string(svace_output_path)
                         if svace_output != '':
+                            '''assistant = prompt[prompt.index('<end_token>'):]
+                            user = f'<user_token>Feedback for previous solution: {svace_output}Keep that in mind. ' + prompt[prompt.index('<user_token>') + len('<user_token>'):prompt.index('<end_token>')]
+                            prompt = user + assistant'''
                             idx = prompt.index('<end_token>')
                             
                             #constructing prompt without last generation
-                            prompt_contents = f'<user_token>Correct previous solution with this feedback: {svace_output}.\n Write the resulting code. '
+                            prompt_contents = f'<user_token>Correct previous solution with this feedback: {svace_output}Write the resulting code. '
                             prompt=prompt_contents + prompt[idx:]
+                            with open(os.path.join(task_path, 'prompt_for_next_gen.txt'), 'w') as f:
+                                f.write(prompt)
                             
                             '''
                             #constructing prompt with last generation
-                            pred_generation = read_file_to_string(f'/home/jovyan/CodePatchLLM/bigcode-evaluation-harness/llm_code/{sample}/solution.py' )
-                            prompt_contents = f'<user_token>Correct program with this feedback:  {svace_output}.\n Write the resulting code. '
+                            pred_generation = read_file_to_string(f'./llm_code/{sample}/solution.py' )
+                            prompt_contents = f'<user_token>Correct program with this feedback: {svace_output}.\n Write the resulting code. '
                             prompt = prompt_contents + f'<end_token><assistant_token>{pred_generation}'
                             '''
+                            
                             
             else:
                 raise ValueError(f"Unsupported prompt format: {type(prompt_contents)}")
@@ -121,7 +153,7 @@ class TokenizedDataset(IterableDataset):
                 if isinstance(prompt_encoder, str):
                     prompt_encoder = self.prefix + prompt_encoder
                 prompts_encoder.append(prompt_encoder)
-                
+        f.close()      
 
         if not len(set(infill)) == 1 or not len(set(instruction)) == 1:
             raise ValueError(

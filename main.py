@@ -3,7 +3,6 @@ import fnmatch
 import json
 import warnings
 import shutil
-
 import datasets
 import torch
 import transformers
@@ -14,12 +13,12 @@ from transformers import (
     AutoTokenizer,
     HfArgumentParser,
 )
-
 from bigcode_eval.arguments import EvalArguments
 from bigcode_eval.evaluator import Evaluator
 from bigcode_eval.tasks import ALL_TASKS
 from bigcode_eval.program_analysis import svace_analyze
 import logging
+import numpy as np
 class MultiChoice:
     def __init__(self, choices):
         self.choices = choices
@@ -60,13 +59,32 @@ def define_lang_for_static_analyzis(task_name):
         lang = ''
     return formats, lang
 
-def static_analyzis_cycle(formats, lang, path, epoch, code_generations, good_gens): 
+def static_analyzis_cycle(formats, lang, path, epoch, code_generations, gens_res, separate_dirs): 
     print(f'---> Starting epoch {epoch}')
     task_id = 0
     for code in code_generations:
-        if good_gens[task_id]:
+        if gens_res[task_id] > -1:
             task_id += 1
             continue
+        print(f'Task id: {task_id}')
+        if separate_dirs:
+            code_path = os.path.join(path, f'{task_id}/{epoch}')
+        else:
+            code_path = os.path.join(path, str(task_id))
+        os.makedirs(code_path, exist_ok=True)
+        code_file_path = os.path.join(code_path, f"solution.{formats}")
+        with open(code_file_path, "w") as f:
+            f.write(code[0])
+        svace_flag = svace_analyze(file=f"solution.{formats}", lang=lang, dir=code_path, task_id=task_id)
+        if svace_flag == 0: 
+            break
+        task_id += 1
+    return 
+
+def static_analyzis_cycle_for_gen(formats, lang, path, code_generations): 
+    z = open('gens.json', 'w')
+    task_id = 0
+    for code in code_generations:
         print(f'Task id: {task_id}')
         code_path = os.path.join(path, str(task_id))
         os.makedirs(code_path, exist_ok=True)
@@ -76,7 +94,12 @@ def static_analyzis_cycle(formats, lang, path, epoch, code_generations, good_gen
         svace_flag = svace_analyze(file=f"solution.{formats}", lang=lang, dir=code_path, task_id=task_id)
         if svace_flag == 0: 
             break
+       
+        cont = {'id': task_id, 'code': code[0], 'output': read_file_to_string(os.path.join(code_path, 'svace_message.txt'))}
+        z.write(str(cont)+',')
+        shutil.rmtree(code_path)
         task_id += 1
+    z.close()
     return 
         
 def parse_args():
@@ -264,6 +287,11 @@ def parse_args():
         default=3,
         help="Number of epochs to try static analyzis",
     )
+    parser.add_argument(
+        "--separate_dirs",
+        action="store_true",
+        help="Whether to save result for each epoch or not",
+    )
     return parser.parse_args()
 
 
@@ -374,12 +402,12 @@ def main():
 
         if args.peft_model:
             from peft import PeftModel  # dynamic import to avoid dependency on peft
-
+            
             model = PeftModel.from_pretrained(model, args.peft_model)
-            print("Loaded PEFT model. Merging...")
-            model.merge_and_unload()
-            print("Merge complete.")
-
+            #print("Loaded PEFT model. Merging...")
+            #model.merge_and_unload()
+            #print("Merge complete.")
+    
         if args.left_padding:
             # left padding is required for some models like chatglm3-6b
             tokenizer = AutoTokenizer.from_pretrained(
@@ -457,28 +485,48 @@ def main():
                         save_references_path,
                     )
             else:
+                path = "./llm_code"
+                try:
+                    shutil.rmtree(path)
+                except: 
+                    pass
                 results[task], generations = evaluator.evaluate(
                     task, intermediate_generations=intermediate_generations
                 )
+                metric_before_s_a = results[task]['pass@1']
                 if args.static_analyze: 
                     formats, lang = define_lang_for_static_analyzis(task)
                     if formats == '' and lang == '':
                         print(f"ERROR! Can't do static analyzis on this dataset: {task}. Skipping...")
                         continue
                     #define path where code gens will be stored
-                    path = "./llm_code"
                     os.makedirs(path, exist_ok=True)
-                    good_gens =[False]*args.limit
+                    '''gen_res = {}
+                    indexes = [i for i in range(args.limit)]
+                    for idx in indexes:''' 
+                    # -1 - no good gen, 0 - good gen from zero iter, 1 - good gen from first iter, etc.
+                    #gen_res[idx] = -1
+                    gens_res =[-1]*len(generations)
                     for epoch in range(args.static_analyze_epochs):
-                        static_analyzis_cycle(formats, lang, path, epoch, generations, good_gens)
+                        static_analyzis_cycle(formats, lang, path, epoch, generations, gens_res, args.separate_dirs)
                         continue_analyzis = False
                         for idx in os.listdir(path):
-                            svace_output = read_file_to_string(os.path.join(path, f"{idx}/svace_message.txt"))
+                            if args.separate_dirs:
+                                task_path = f'{path}/{idx}'
+                                max_epoch = max([int(i) for i in os.listdir(task_path)])
+                                svace_output = read_file_to_string(os.path.join(path, f"{idx}/{max_epoch}/svace_message.txt"))
+                            else:
+                                svace_output = read_file_to_string(os.path.join(path, f"{idx}/svace_message.txt"))
                             #print('Output', svace_output)
                             if svace_output != '':
                                 continue_analyzis = True
                             else: 
-                                good_gens[int(idx)] = True
+                                if gens_res[int(idx)] == -1:
+                                    gens_res[int(idx)] = epoch
+                                if not args.separate_dirs:
+                                    svace_dir = os.path.join(path, f"{idx}/.svace-dir")
+                                    if os.path.exists(svace_dir):
+                                        shutil.rmtree(svace_dir)
                         if continue_analyzis:
                             print(f'Generations didnt pass static analyzer test. Continuing...')
                             results[task], generations = evaluator.evaluate(
@@ -489,6 +537,19 @@ def main():
                             break
 
     # Save all args to config
+    if args.static_analyze:
+        for key in results.keys():
+            results[key]['pass@1 before static analyzer'] = str(metric_before_s_a)
+            #res = list(np.unique(gens_res, return_counts = True)[1])
+            #res = res + [0]*(args.static_analyze_epochs + 1 - len(res))
+            results[key]['gens_res_values'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[0])]
+            results[key]['gens_res_counts'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[1])]
+            '''results[key]['number of tasks generated bad and not fixed'] = str(res[0])
+            for i in range(args.static_analyze_epochs): 
+                results[key][f'number of tasks generated good from {i} epoch'] = str(res[i+1])
+            results[key]['percent of wrong generated codes static analyzer fixed in 3 epochs'] = str((res[2] + res[3]) * 100 / (res[2] + res[3] + res[0]))
+            results[key]['percent of wrong generated codes static analyzer didnt fix in 3 epochs'] = str(res[0] * 100 / (res[2] + res[3] + res[0]))
+            results[key]['percent of good generated codes according to static analyzer in 3 epochs'] = str((res[2] + res[3] + res[1]) * 100 / (res[2] + res[3] + res[0] + res[1]))'''
     results["config"] = vars(args)
     if not args.generation_only:
         dumped = json.dumps(results, indent=2)
