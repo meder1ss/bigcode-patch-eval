@@ -16,7 +16,7 @@ from transformers import (
 from bigcode_eval.arguments import EvalArguments
 from bigcode_eval.evaluator import Evaluator
 from bigcode_eval.tasks import ALL_TASKS
-from bigcode_eval.program_analysis import svace_analyze
+from bigcode_eval.program_analysis import svace_analyze, bandit_analyze
 import logging
 import numpy as np
 class MultiChoice:
@@ -41,7 +41,7 @@ def read_file_to_string(file_path):
     return file_contents
 
 def define_lang_for_static_analyzis(task_name): 
-    if task_name in ["humaneval","instruct-humaneval","humanevalfixtests-python"]:
+    if task_name in ["humaneval","instruct-humaneval","humanevalfixtests-python", "mbppplus", "ds1000-all-completion", "apps-introductory", "apps-interview", "apps-competition", "studenteval", "mercury", "conala"]:
         formats = "py"
         lang = 'python'
     elif task_name == 'humanevalfixtests-java': 
@@ -59,7 +59,7 @@ def define_lang_for_static_analyzis(task_name):
         lang = ''
     return formats, lang
 
-def static_analyzis_cycle(formats, lang, path, epoch, code_generations, gens_res, separate_dirs): 
+def static_analyzis_cycle(formats, lang, path, epoch, code_generations, gens_res, separate_dirs, bandit): 
     print(f'---> Starting epoch {epoch}')
     task_id = 0
     for code in code_generations:
@@ -78,30 +78,34 @@ def static_analyzis_cycle(formats, lang, path, epoch, code_generations, gens_res
         svace_flag = svace_analyze(file=f"solution.{formats}", lang=lang, dir=code_path, task_id=task_id)
         if svace_flag == 0: 
             break
+        if bandit: 
+            bandit_flag = bandit_analyze(file=f"solution.{formats}", lang=lang, dir=code_path)
+            if bandit_flag == 0: 
+                break
         task_id += 1
     return 
-
-def static_analyzis_cycle_for_gen(formats, lang, path, code_generations): 
-    z = open('gens.json', 'w')
+def bandit_analyzis_cycle(formats, lang, path, epoch, code_generations, gens_res, separate_dirs): 
+    print(f'---> Starting epoch {epoch}')
     task_id = 0
     for code in code_generations:
+        if gens_res[task_id] > -1:
+            task_id += 1
+            continue
         print(f'Task id: {task_id}')
-        code_path = os.path.join(path, str(task_id))
+        if separate_dirs:
+            code_path = os.path.join(path, f'{task_id}/{epoch}')
+        else:
+            code_path = os.path.join(path, str(task_id))
         os.makedirs(code_path, exist_ok=True)
         code_file_path = os.path.join(code_path, f"solution.{formats}")
         with open(code_file_path, "w") as f:
             f.write(code[0])
-        svace_flag = svace_analyze(file=f"solution.{formats}", lang=lang, dir=code_path, task_id=task_id)
-        if svace_flag == 0: 
+        bandit_flag = bandit_analyze(file=f"solution.{formats}", lang=lang, dir=code_path)
+        if bandit_flag == 0: 
             break
-       
-        cont = {'id': task_id, 'code': code[0], 'output': read_file_to_string(os.path.join(code_path, 'svace_message.txt'))}
-        z.write(str(cont)+',')
-        shutil.rmtree(code_path)
         task_id += 1
-    z.close()
     return 
-        
+
 def parse_args():
     parser = HfArgumentParser(EvalArguments)
 
@@ -118,7 +122,7 @@ def parse_args():
     parser.add_argument(
         "--peft_model",
         type=str,
-        default=None,
+        default=None, 
         help="Adapter to the PEFT base model. Can be utilized for loading PEFT adapters such as a LoRA trained model. The --model parameter needs to be the base model.",
     )
     parser.add_argument(
@@ -279,13 +283,24 @@ def parse_args():
     parser.add_argument(
         "--static_analyze",
         action="store_true",
-        help="Whether to run static analyzation or not",
+        help="Whether to run static analysis or not",
     )
     parser.add_argument(
         "--static_analyze_epochs",
         type=int,
         default=3,
-        help="Number of epochs to try static analyzis",
+        help="Number of epochs to try static analysis",
+    )
+    parser.add_argument(
+        "--bandit_analyze",
+        action="store_true",
+        help="Whether to run bandit analysis or not",
+    )
+    parser.add_argument(
+        "--bandit_analyze_epochs",
+        type=int,
+        default=3,
+        help="Number of epochs to try bandit analysis",
     )
     parser.add_argument(
         "--separate_dirs",
@@ -381,7 +396,7 @@ def main():
                 else:
                     model_kwargs["device_map"] = "auto"
                     print("Loading model in auto mode")
-
+    
         if args.modeltype == "causal":
             model = AutoModelForCausalLM.from_pretrained(
                 args.model,
@@ -404,9 +419,7 @@ def main():
             from peft import PeftModel  # dynamic import to avoid dependency on peft
             
             model = PeftModel.from_pretrained(model, args.peft_model)
-            #print("Loaded PEFT model. Merging...")
-            #model.merge_and_unload()
-            #print("Merge complete.")
+            model.merge_and_unload()
     
         if args.left_padding:
             # left padding is required for some models like chatglm3-6b
@@ -465,8 +478,6 @@ def main():
             intermediate_generations = None
             if args.load_generations_intermediate_paths:
                 with open(args.load_generations_intermediate_paths[idx], "r") as f_in:
-                    # intermediate_generations: list[list[str | None]] of len n_tasks
-                    # where list[i] = generated codes or empty
                     intermediate_generations = json.load(f_in)
 
             if args.generation_only:
@@ -501,24 +512,25 @@ def main():
                         continue
                     #define path where code gens will be stored
                     os.makedirs(path, exist_ok=True)
-                    '''gen_res = {}
-                    indexes = [i for i in range(args.limit)]
-                    for idx in indexes:''' 
                     # -1 - no good gen, 0 - good gen from zero iter, 1 - good gen from first iter, etc.
-                    #gen_res[idx] = -1
                     gens_res =[-1]*len(generations)
                     for epoch in range(args.static_analyze_epochs):
-                        static_analyzis_cycle(formats, lang, path, epoch, generations, gens_res, args.separate_dirs)
+                        static_analyzis_cycle(formats, lang, path, epoch, generations, gens_res, args.separate_dirs, args.bandit_analyze)
                         continue_analyzis = False
                         for idx in os.listdir(path):
+                            bandit_output = ''
                             if args.separate_dirs:
                                 task_path = f'{path}/{idx}'
                                 max_epoch = max([int(i) for i in os.listdir(task_path)])
                                 svace_output = read_file_to_string(os.path.join(path, f"{idx}/{max_epoch}/svace_message.txt"))
+                                if args.bandit_analyze:
+                                    bandit_output = read_file_to_string(os.path.join(path, f"{idx}/{max_epoch}/bandit_message.txt"))
                             else:
                                 svace_output = read_file_to_string(os.path.join(path, f"{idx}/svace_message.txt"))
-                            #print('Output', svace_output)
-                            if svace_output != '':
+                                if args.bandit_analyze:
+                                    bandit_output = read_file_to_string(os.path.join(path, f"{idx}/svace_message.txt"))
+                            
+                            if svace_output != '' or bandit_output != '':
                                 continue_analyzis = True
                             else: 
                                 if gens_res[int(idx)] == -1:
@@ -535,21 +547,58 @@ def main():
                         else:
                             print(f'SUCCESS: all generations passed static analyzer test! Finishing on {epoch} epoch.')
                             break
+                elif args.bandit_analyze: 
+                    formats, lang = define_lang_for_static_analyzis(task)
+                    if lang != 'python':
+                        print(f"ERROR! Can't do bandit analyzis on this dataset: {task}. Skipping...")
+                        continue
+                    os.makedirs(path, exist_ok=True)
+                    # -1 - no good gen, 0 - good gen from zero iter, 1 - good gen from first iter, etc.
+                    gens_res =[-1]*len(generations)
+                    for epoch in range(args.bandit_analyze_epochs):
+                        bandit_analyzis_cycle(formats, lang, path, epoch, generations, gens_res, args.separate_dirs)
+                        continue_analyzis = False
+                        for idx in os.listdir(path):
+                            if args.separate_dirs:
+                                task_path = f'{path}/{idx}'
+                                max_epoch = max([int(i) for i in os.listdir(task_path)])
+                                bandit_output = read_file_to_string(os.path.join(path, f"{idx}/{max_epoch}/bandit_message.txt"))
+                            else:
+                                bandit_output = read_file_to_string(os.path.join(path, f"{idx}/bandit_message.txt"))
+                            
+                            if bandit_output != '':
+                                continue_analyzis = True
+                            else: 
+                                if gens_res[int(idx)] == -1:
+                                    gens_res[int(idx)] = epoch
+                                if not args.separate_dirs:
+                                    svace_dir = os.path.join(path, f"{idx}/.svace-dir")
+                                    if os.path.exists(svace_dir):
+                                        shutil.rmtree(svace_dir)
+                        if continue_analyzis:
+                            print(f'Generations didnt pass bandit analyzer test. Continuing...')
+                            results[task], generations = evaluator.evaluate(
+                                task, intermediate_generations=intermediate_generations
+                            )
+                        else:
+                            print(f'SUCCESS: all generations passed bandit analyzer test! Finishing on {epoch} epoch.')
+                            break
 
-    # Save all args to config
     if args.static_analyze:
         for key in results.keys():
-            results[key]['pass@1 before static analyzer'] = str(metric_before_s_a)
-            #res = list(np.unique(gens_res, return_counts = True)[1])
-            #res = res + [0]*(args.static_analyze_epochs + 1 - len(res))
+            if args.bandit_analyze:
+                results[key]['pass@1 before static and bandit analyzer'] = str(metric_before_s_a)
+            else:
+                results[key]['pass@1 before static analyzer'] = str(metric_before_s_a)
             results[key]['gens_res_values'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[0])]
             results[key]['gens_res_counts'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[1])]
-            '''results[key]['number of tasks generated bad and not fixed'] = str(res[0])
-            for i in range(args.static_analyze_epochs): 
-                results[key][f'number of tasks generated good from {i} epoch'] = str(res[i+1])
-            results[key]['percent of wrong generated codes static analyzer fixed in 3 epochs'] = str((res[2] + res[3]) * 100 / (res[2] + res[3] + res[0]))
-            results[key]['percent of wrong generated codes static analyzer didnt fix in 3 epochs'] = str(res[0] * 100 / (res[2] + res[3] + res[0]))
-            results[key]['percent of good generated codes according to static analyzer in 3 epochs'] = str((res[2] + res[3] + res[1]) * 100 / (res[2] + res[3] + res[0] + res[1]))'''
+
+    elif args.bandit_analyze:
+        for key in results.keys():
+            results[key]['pass@1 before bandit analyzer'] = str(metric_before_s_a)
+            results[key]['gens_res_values'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[0])]
+            results[key]['gens_res_counts'] = [str(g) for g in list(np.unique(gens_res, return_counts = True)[1])]
+
     results["config"] = vars(args)
     if not args.generation_only:
         dumped = json.dumps(results, indent=2)

@@ -41,24 +41,14 @@ def svace_analyze(file, lang, dir, task_id):
     try:
         test = subprocess.run(compiler_comand, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               text=True)
-        # logging.info(f"Svace build out: {test.stdout} for file: {file}")
     except subprocess.CalledProcessError as e:
         logging.info(f"svace build: {test.stdout}")
         logging.error(f"Error executing command: {compiler_comand}")
         logging.error(f"Error message: {e.stderr}")
         if len(e.stderr) == 0:
-            #result = "Write the full code with the correction."
             result = ""
         else:
             result = e.stderr
-            #result = result[:result.find("svace build: error:") + len("svace build: error:")]
-            '''
-            if result.find("svace build: error:") != -1:
-                result = result[:result.find("svace build: error:") + len("svace build: error:")]
-            elif 'root: warning: Failed to compile' in result: 
-                result = 'svace build: error: Failed to compile, syntax error
-            '''
-            #logging.info(f'result: {result, e.stderr}')
     if 'no file found which analysis is supported by Python version' in result: 
         if lang == 'python':
             compiler_comand = f"cd {dir}; {SVACE_PATH} build python {file}"
@@ -69,7 +59,6 @@ def svace_analyze(file, lang, dir, task_id):
             logging.error(f"Error executing command: {compiler_comand}")
             logging.error(f"Error message: {e.stderr}")
             result = e.stderr
-            #result = result[:result.find("svace build: error:") + len("svace build: error:")]
             result = 'Error in ' + result[result.find('line'):result.find("svace build: error:")]
     
     if len(result) == 0:
@@ -110,3 +99,70 @@ def svace_analyze(file, lang, dir, task_id):
         f.write(result)
     logging.info(f"Finished Svace analyzing, result saved in {output_file_path} {result}")
     return 1
+
+def valgrind_analyze(file, lang, dir, task_id):
+    if lang != "cpp":
+        raise Exception("Unsupported language. Only C++ is supported for dynamic analysis with Valgrind.")
+
+    logging.info(f"Starting Valgrind analysis for file: {file} in directory: {dir}")
+
+    compiled = True
+    compile_command = f"cd {dir}; g++ -g -o program {file}"
+    try:
+        compile_proc = subprocess.run(compile_command, shell=True, check=True,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      text=True)
+        logging.info(f"Compilation output: {compile_proc.stdout}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Compilation failed. Error: {e.stderr}")
+        result = e.stderr
+        compiled = False
+
+    if compiled:
+        valgrind_command = f"cd {dir}; valgrind --tool=memcheck --leak-check=full --track-origins=yes ./program"
+        try:
+            valgrind_proc = subprocess.run(valgrind_command, shell=True, check=True,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           text=True)
+            result = valgrind_proc.stderr
+            result = result[result.find('HEAP SUMMARY:'):]
+            if "All heap blocks were freed -- no leaks are possible" in result:
+                result = ""
+            logging.info(f"Valgrind analysis output: {result}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Valgrind execution error: {e.stderr}")
+            result = e.stderr
+    output_file_path = os.path.join(dir, f"valgrind_message_{task_id}.txt")
+    try:
+        with open(output_file_path, "w") as f:
+            f.write(result)
+        logging.info(f"Finished Valgrind analysis, result saved in {output_file_path}")
+    except Exception as ex:
+        logging.error(f"Failed to write Valgrind output file: {ex}")
+        return 0
+
+    return 1
+def bandit_analyze(file, lang, dir):
+    if lang != "python":
+        logging.info("Unsupported language. Only Python is supported for bandit analysis.")
+        return 0
+    logging.info(f"Starting Bandit analysis for file: {file} in directory: {dir}")
+    
+    bandit_command = f"cd {dir}; bandit {file}"
+    try:
+        bandit_proc = subprocess.run(bandit_command, shell=True, check=False,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      text=True)
+        result = bandit_proc.stdout + bandit_proc.stderr
+        if 'Issue' in result:
+            error_prompt = result[result.index("Issue"):result.index("--------")]
+        else:
+            error_prompt = ""
+        output_file_path = os.path.join(dir, f"bandit_message.txt")
+        with open(output_file_path, "w") as f:
+            f.write(error_prompt)
+        logging.info(f"Finished bandit analyzing, result saved in {output_file_path} {result}")
+        return 1
+    except Exception as e:
+        logging.info(f"Error while executing bandit command: {e}")
+        return 0
