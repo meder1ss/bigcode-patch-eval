@@ -1,0 +1,61 @@
+{
+  "instruct-humaneval": {
+    "pass@1": 0.8719512195121951,
+    "pass@1 before static analyzer": "0.8658536585365854",
+    "gens_res_values": [
+      "-1",
+      "0",
+      "1"
+    ],
+    "gens_res_counts": [
+      "1",
+      "161",
+      "2"
+    ]
+  },
+  "config": {
+    "prefix": "",
+    "do_sample": true,
+    "temperature": 0.2,
+    "top_k": 0,
+    "top_p": 0.95,
+    "n_samples": 1,
+    "eos": "<|endoftext|>",
+    "seed": 0,
+    "model": "Qwen/Qwen2.5-Coder-7B-instruct",
+    "modeltype": "causal",
+    "peft_model": "/home/jovyan/CodePatchLLM/outputs_code_preference_3_epochs/checkpoint-4500",
+    "revision": null,
+    "use_auth_token": true,
+    "trust_remote_code": true,
+    "tasks": "instruct-humaneval",
+    "instruction_tokens": "<user_token>,<end_token>,<assistant_token>",
+    "batch_size": 1,
+    "max_length_generation": 1024,
+    "precision": "fp32",
+    "load_in_8bit": false,
+    "load_in_4bit": false,
+    "left_padding": false,
+    "limit": null,
+    "limit_start": 0,
+    "save_every_k_tasks": -1,
+    "postprocess": true,
+    "allow_code_execution": true,
+    "generation_only": false,
+    "load_generations_path": null,
+    "load_data_path": null,
+    "metric_output_path": "evaluation_results.json",
+    "save_generations": true,
+    "load_generations_intermediate_paths": null,
+    "save_generations_path": "generations.json",
+    "save_references": false,
+    "save_references_path": "references.json",
+    "prompt": "prompt",
+    "max_memory_per_gpu": null,
+    "check_references": false,
+    "static_analyze": true,
+    "static_analyze_epochs": 3,
+    "separate_dirs": false,
+    "generate_rl_data": false
+  }
+}
